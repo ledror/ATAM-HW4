@@ -263,15 +263,19 @@ void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long g
             break;
         }
         else {
+            // single stepping manoeuvre
             ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
             regs.rip = regs.rip - 1;
             ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
             ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
             wait(&wait_status);
+
             ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
             ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
             regs.rip = regs.rip - 1;
             ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
             ptrace(PTRACE_CONT, child_pid, NULL, NULL);
             wait(&wait_status);
         }
@@ -307,17 +311,46 @@ void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long g
         ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
         ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)func_data);
 
-        // we will now run single steps until we know we returned from the function
+        // placing a trap on the return address:
+        // we might get to it before the function returns so we must check the RSPs
+        unsigned long ret_addr_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)ret_addr, NULL);
+        unsigned long ret_addr_trap = (ret_addr_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
+        ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
+
+        // we can now continue the program
+        ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+        wait(&wait_status);
+
+        // each time we get to a trap, we must check if we returned from the function!!
         while(WIFSTOPPED(wait_status)) {
-            ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
-            wait(&wait_status);
             ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-            if (regs.rip == ret_addr && regs.rsp == rsp_orig + 8) {
+            if (regs.rip - 1 == ret_addr && regs.rsp == rsp_orig + 8) {
+                ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
                 printf("PRF:: run #%d returned with %d\n", counter, (int)regs.rax);
-                ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)func_data_trap);
+                regs.rip = regs.rip - 1;
+                ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
                 break;
             }
+            else {
+                // single stepping manoeuvre once again
+                ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
+                regs.rip = regs.rip - 1;
+                ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
+                ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
+                wait(&wait_status);
+
+                ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
+                ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
+                regs.rip = regs.rip - 1;
+                ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
+                ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+                wait(&wait_status);
+            }
         }
+        // restore the trap on the function
+        ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)func_data_trap);
         ptrace(PTRACE_CONT, child_pid, NULL, NULL);
         wait(&wait_status);
     }
@@ -354,7 +387,7 @@ int main(int argc, char* argv[]){
 
     if (*error_val == -4) {
         symbol_addr = find_shared_symbol(argv[1], argv[2]);
-        run_undefined_function_debugger(child_pid, symbol_addr);
+        run_undefined_function_debugger_refactored(child_pid, symbol_addr);
     }
     else {
         run_defined_function_debugger(child_pid, symbol_addr);
