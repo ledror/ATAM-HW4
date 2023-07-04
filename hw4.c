@@ -58,7 +58,7 @@ void run_defined_function_debugger(pid_t child_pid, unsigned long func_addr){
     while (WIFSTOPPED(wait_status)) {
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
         if (regs.rip - 1 != func_addr) {
-            // printf("Stopped at a wrong address!\n");
+            printf("Stopped at a wrong address!\n");
             return;
         }
         // we are now at the beginning of the function
@@ -205,7 +205,7 @@ void run_undefined_function_debugger(pid_t child_pid, unsigned long got_func_add
     while(WIFSTOPPED(wait_status)) {
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
         if (regs.rip - 1 != real_func_addr) {
-            // printf("Stopped at a wrong address!\n");
+            printf("Stopped at a wrong address!\n");
             return;
         }
         // we are now at the beginning of the function
@@ -274,7 +274,7 @@ void run_undefined_function_debugger(pid_t child_pid, unsigned long got_func_add
 */
 int main(int argc, char* argv[]){
     if (argc < 3) {
-        // printf("Usage: %s <function name> <executable file> <arguments>\n", argv[0]);
+        printf("Usage: %s <function name> <executable file> <arguments>\n", argv[0]);
         return 0;
     }
 
@@ -302,4 +302,6 @@ int main(int argc, char* argv[]){
     else {
         run_defined_function_debugger(child_pid, symbol_addr);
     }
+
+    return 0;
 }
