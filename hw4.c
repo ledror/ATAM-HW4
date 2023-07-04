@@ -53,164 +53,74 @@ void run_defined_function_debugger(pid_t child_pid, unsigned long func_addr){
     ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
 
     ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-
     wait(&wait_status);
+
     while (WIFSTOPPED(wait_status)) {
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
         if (regs.rip - 1 != func_addr) {
-            printf("PROBLEM HERE\n");
-            printf("rip: %lld\n", regs.rip);
-            printf("func_addr: %ld\n", func_addr);
+            // printf("Stopped at a wrong address!\n");
             return;
         }
+        // we are now at the beginning of the function
         counter++;
+        printf("PRF:: run #%d first parameter is %d\n", counter, (int)regs.rdi);
+        
+        // retrieving the return address from the stack
         unsigned long rsp_orig = regs.rsp;
-        // set trap on return address
         unsigned long ret_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)rsp_orig, NULL);
+        
+        // placing a trap on the return address
+        // we might get to it before the function returns so we must check the RSPs
         unsigned long ret_addr_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)ret_addr, NULL);
         unsigned long ret_addr_trap = (ret_addr_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
-        printf("PRF:: run #%d first parameter is %d\n", counter, (int)regs.rdi);
-        // restore rip and remove trap
+        
+        // restoring rip and removing the trap on the function
         regs.rip = regs.rip - 1;
         ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
         ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data);
+        
+        // we can now continue the program
         ptrace(PTRACE_CONT, child_pid, NULL, NULL);
         wait(&wait_status);
-        // each time we get to a trap, 
+
+        // each time we get to a trap, we must check if we returned from the function!!
         while (WIFSTOPPED(wait_status)) {
             ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
             if (regs.rip - 1 == ret_addr && regs.rsp == rsp_orig + 8) {
-                // remove trap from return address
                 ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
-                // restore trap to function address
-                ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
-                // restore rip
+                printf("PRF:: run #%d returned with %d\n", counter, (int)regs.rax);
                 regs.rip = regs.rip - 1;
-                printf("PRF:: run #%d returned with %d\n", counter, (int)regs.rax);
                 ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
-                wait_status = MY_DONE;
                 break;
             }
-            ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-            wait(&wait_status);
+            else {
+                // single stepping manoeuvre once again
+                ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
+                regs.rip = regs.rip - 1;
+                ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
+                ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
+                wait(&wait_status);
+
+                ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
+                ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
+                regs.rip = regs.rip - 1;
+                ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+
+                ptrace(PTRACE_CONT, child_pid, NULL, NULL);
+                wait(&wait_status);
+            }
         }
 
-        if (wait_status != MY_DONE) {
-            printf("PROBLEM HERE2 (inf loop?)\n");
-            return;
-        }
-
+        // restore the trap on the function
+        ptrace(PTRACE_POKETEXT, child_pid, (void*)func_addr, (void*)data_trap);
         ptrace(PTRACE_CONT, child_pid, NULL, NULL);
         wait(&wait_status);
     }
 }
 
-void run_undefined_function_debugger(pid_t child_pid, unsigned long got_func_addr){
-    int wait_status;
-    int counter = 0;
-    struct user_regs_struct regs;
-
-    wait(&wait_status);
-
-    // setting trap in the beginning of the plt entry
-    unsigned long plt_instr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_func_addr, NULL) - 6;
-    unsigned long plt_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)plt_instr, NULL);
-    unsigned long plt_trap = (plt_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)plt_instr, (void*)plt_trap);
-
-    ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-
-    wait(&wait_status);
-
-    // first plt call of the function
-    counter++;
-    ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-    unsigned long rsp_orig = regs.rsp;
-    // set trap on return address
-    unsigned long ret_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)rsp_orig, NULL);
-    unsigned long ret_addr_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)ret_addr, NULL);
-    unsigned long ret_addr_trap = (ret_addr_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
-    printf("PRF:: run #%d first parameter is %d\n", counter, (int)regs.rdi);
-    // restore rip and remove trap from plt entry
-    regs.rip = regs.rip - 1;
-    ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)plt_instr, (void*)plt_data);
-    ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-    wait(&wait_status);
-    // each time we get to a trap,
-    while (WIFSTOPPED(wait_status)) {
-        ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-        if (regs.rip - 1 == ret_addr && regs.rsp == rsp_orig + 8) {
-            // remove trap from return address
-            ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_data);
-            // restore rip
-            regs.rip = regs.rip - 1;
-            printf("PRF:: run #%d returned with %d\n", counter, (int)regs.rax);
-            ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
-            wait_status = MY_DONE;
-            break;
-        }
-        ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-        wait(&wait_status);
-    }
-
-    // now we know the real address of the function
-    // we need to set a trap on the function itself
-
-    unsigned long real_func_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)got_func_addr, NULL);
-    // setting trap in the beginning of the function
-    unsigned long data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)real_func_addr, NULL);
-    unsigned long data_trap = (data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-    ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)data_trap);
-
-    ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-
-    wait(&wait_status);
-    while (WIFSTOPPED(wait_status)) {
-        ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-        if (regs.rip - 1 != real_func_addr) {
-            printf("PROBLEM HERE\n");
-            printf("rip: %llx\n", regs.rip);
-            printf("func_addr: %lx\n", real_func_addr);
-            return;
-        }
-        counter++;
-        unsigned long rsp_orig = regs.rsp;
-        ret_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)rsp_orig, NULL);
-        unsigned long rbp_orig = regs.rbp;
-        // set trap on return address
-        // unsigned long ret_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)rsp_orig, NULL);
-        // unsigned long ret_addr_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)ret_addr, NULL);
-        // unsigned long ret_addr_trap = (ret_addr_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
-        // ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
-        printf("PRF:: run #%d first parameter is %d\n", counter, (int)regs.rdi);
-        // restore rip and remove trap
-        regs.rip = regs.rip - 1;
-        ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
-        ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)data);
-        // we will now run single steps in a loop
-        // until rip is equal to the return address and rsp is equal to the original rsp
-        // this means we have returned from the function
-        while (1) {
-            ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
-            wait(&wait_status);
-            ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
-            if (regs.rip == ret_addr && regs.rsp == rsp_orig + 8) {
-                // we returned from the function, print the return value
-                printf("PRF:: run #%d returned with %d\n", counter, (int)regs.rax);
-                // set trap on function address
-                ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)data_trap);
-                break;
-            }
-        }
-        ptrace(PTRACE_CONT, child_pid, NULL, NULL);
-        wait(&wait_status);
-    }
-}
-
-void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long got_func_addr) {
+void run_undefined_function_debugger(pid_t child_pid, unsigned long got_func_addr) {
     int wait_status;
     int counter = 0;
     struct user_regs_struct regs;
@@ -295,7 +205,7 @@ void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long g
     while(WIFSTOPPED(wait_status)) {
         ptrace(PTRACE_GETREGS, child_pid, NULL, &regs);
         if (regs.rip - 1 != real_func_addr) {
-            printf("Stopped at a wrong address!\n");
+            // printf("Stopped at a wrong address!\n");
             return;
         }
         // we are now at the beginning of the function
@@ -306,16 +216,16 @@ void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long g
         unsigned long rsp_orig = regs.rsp;
         unsigned long ret_addr = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)rsp_orig, NULL);
 
-        // restoring rip and removing the trap on the function
-        regs.rip = regs.rip - 1;
-        ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
-        ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)func_data);
-
         // placing a trap on the return address:
         // we might get to it before the function returns so we must check the RSPs
         unsigned long ret_addr_data = ptrace(PTRACE_PEEKTEXT, child_pid, (void*)ret_addr, NULL);
         unsigned long ret_addr_trap = (ret_addr_data & 0xFFFFFFFFFFFFFF00) | 0xCC;
         ptrace(PTRACE_POKETEXT, child_pid, (void*)ret_addr, (void*)ret_addr_trap);
+
+        // restoring rip and removing the trap on the function
+        regs.rip = regs.rip - 1;
+        ptrace(PTRACE_SETREGS, child_pid, NULL, &regs);
+        ptrace(PTRACE_POKETEXT, child_pid, (void*)real_func_addr, (void*)func_data);
 
         // we can now continue the program
         ptrace(PTRACE_CONT, child_pid, NULL, NULL);
@@ -364,7 +274,7 @@ void run_undefined_function_debugger_refactored(pid_t child_pid, unsigned long g
 */
 int main(int argc, char* argv[]){
     if (argc < 3) {
-        printf("Usage: %s <function name> <executable file> <arguments>\n", argv[0]);
+        // printf("Usage: %s <function name> <executable file> <arguments>\n", argv[0]);
         return 0;
     }
 
@@ -387,7 +297,7 @@ int main(int argc, char* argv[]){
 
     if (*error_val == -4) {
         symbol_addr = find_shared_symbol(argv[1], argv[2]);
-        run_undefined_function_debugger_refactored(child_pid, symbol_addr);
+        run_undefined_function_debugger(child_pid, symbol_addr);
     }
     else {
         run_defined_function_debugger(child_pid, symbol_addr);
