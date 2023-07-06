@@ -278,24 +278,25 @@ int main(int argc, char* argv[]){
         return 0;
     }
 
-    int* error_val;
-    unsigned long symbol_addr = find_symbol(argv[1], argv[2], error_val);
-    if (*error_val == -3) {
+    int error_val;
+    unsigned long symbol_addr = find_symbol(argv[1], argv[2], &error_val);
+    if (error_val == -3) {
         printf("PRF:: %s not an executable!\n", argv[2]);
         return 0;
     }
-    if (*error_val == -1) {
+    if (error_val == -1) {
         printf("PRF:: %s not found! :(\n", argv[1]);
         return 0;
     }
-    if (*error_val == -2) {
+    if (error_val == -2) {
         printf("PRF:: %s is not a global symbol!\n", argv[1]);
         return 0;
     }
 
+
     pid_t child_pid = run_target(argv[2], argv + 2);
 
-    if (*error_val == -4) {
+    if (error_val == -4) {
         symbol_addr = find_shared_symbol(argv[1], argv[2]);
         run_undefined_function_debugger(child_pid, symbol_addr);
     }
