@@ -83,8 +83,6 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 	lseek(fd, StringTableHeader.sh_offset, SEEK_SET);
 	read(fd, StringTable, StringTableHeader.sh_size);
 
-	// printf("~~~~~~~~~\n");
-
 	// reading the symbol table
 	// might be local, global, neither or both
 	Elf64_Sym Symbol;
@@ -95,9 +93,7 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 
 	for(int i = 0; i < SymbolTableHeader.sh_size / sizeof(Elf64_Sym); i++){
 		read(fd, &Symbol, sizeof(Symbol));
-		// printf("symbol name: %s\n", StringTable + Symbol.st_name);
 		if(strcmp(StringTable + Symbol.st_name, symbol_name) == 0){
-			// printf("found symbol %s\n", symbol_name);
 			if(ELF64_ST_BIND(Symbol.st_info) == 0){
 				local = true;
 			}
@@ -107,8 +103,6 @@ unsigned long find_symbol(char* symbol_name, char* exe_file_name, int* error_val
 			}
 		}
 	}
-
-	// printf("local = %d, global = %d\n", local, global);
 
 	if(!local && !global){
 		*error_val = -1;
@@ -192,8 +186,6 @@ unsigned long find_shared_symbol(char* symbol_name, char* exe_file_name) {
 
 	// finding the relocation table
 
-	// printf("~~~~~~~~~\n");
-
 	lseek(fd, ElfHeader.e_shoff, SEEK_SET);
 
 	for(int i = 0; i < ElfHeader.e_shnum; i++){
@@ -204,15 +196,11 @@ unsigned long find_shared_symbol(char* symbol_name, char* exe_file_name) {
 				Elf64_Rela Relocation;
 				lseek(fd, SectionHeader.sh_offset + j * sizeof(Elf64_Rela), SEEK_SET);
 				read(fd, &Relocation, sizeof(Relocation));
-				// printf("symbol name: %s\n", StringTable + ELF64_R_SYM(Relocation.r_info));
-				// printf("symbol index in dynstr: %ld\n", ELF64_R_SYM(Relocation.r_info));
 				// get dynstr symbol
 				Elf64_Sym Symbol;
 				lseek(fd, DynamicSymbolTableHeader.sh_offset + ELF64_R_SYM(Relocation.r_info) * sizeof(Elf64_Sym), SEEK_SET);
 				read(fd, &Symbol, sizeof(Symbol));
-				// printf("symbol name: %s\n", StringTable + Symbol.st_name);
 				if(strcmp(StringTable + Symbol.st_name, symbol_name) == 0){
-					// printf("found symbol %s\n", symbol_name);
 					close(fd);
 					return Relocation.r_offset;
 				}
